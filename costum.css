@@ -1,0 +1,75 @@
+
+img[alt=drawing] { width: 1000px; }
+
+
+#sidebar {
+  background: #062C30;
+  font-family: Helvetica Narrow, sans-serif; 
+  font-size: 26px;
+}
+
+#postamble {
+  background:#05595B;
+  border-top:solid 16px #062C30;
+  font-size: 16px;
+}
+
+#sidebar h1 {
+    background-color: #05595B;
+    font-family: Helvetica Narrow, sans-serif;
+    font-size: 30px;
+}
+
+#sidebar h2 {
+    background-color: #05595B;
+    font-family: Helvetica Narrow, sans-serif;
+    font-size: 24px;
+}
+
+
+
+.title {
+  color: #05595B;
+  font-family: Impact, fantasy;
+  font-size: 40px;
+}
+
+.subtitle {
+  color: #062C30;
+}
+
+p {
+    font-size: 16px;
+    line-height: 24px;
+    margin: 0px 0px 12px 0px;
+    font-family: Helvetica Narrow, sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6, legend {
+    font-family: Helvetica Narrow, sans-serif;
+    font-weight: 700;
+    color: #05595B;
+}
+
+ul {
+    font-family: Helvetica Narrow, sans-serif;
+    font-size: 16px;
+}
+
+
+body{
+  font-family: Helvetica Narrow, sans-serif;
+}
+
+code.r{
+  font-family: Helvetica Narrow, sans-serif;
+  font-size: 12px;
+  
+}
+
+pre {
+  font-family: Helvetica Narrow, sans-serif;
+  font-size: 12px;
+ 
+}
+

@@ -1,0 +1,649 @@
+---
+title: "Ho.. Ho.. Ho.. Where is Santa?"
+author: "Fib Gro"
+date: "`r format(Sys.Date(), '%B %e, %Y')`"
+output: 
+  rmdformats::readthedown:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
+    css : costum.css
+---
+
+# Introduction 
+
+```{r, echo=FALSE, fig.height=8}
+knitr::include_graphics("santa.png")
+```
+
+[Source of Picture](https://eu.onlineathens.com/story/opinion/cartoons/2020/11/25/granlund-cartoon-sanitized-santa/43195485/)
+
+Who does not recognize Santa? He's such a popular man, especially during Christmas. He is a  white-bearded man, often with spectacles, wearing a red coat with white fur collar and cuffs, white-fur-cuffed red trousers, a red hat with white fur, and a black leather belt and boots, carrying a bag full of gifts for children [[^1]](https://en.wikipedia.org/wiki/Santa_Claus#:~:text=Santa%20is%20generally%20depicted%20as,full%20of%20gifts%20for%20children.)
+
+In this study, we will implement a binary classification image dataset by using a deep learning model ("Convolutional Network") which can predict if an image is classified as "Santa Claus" or "Not Santa Clause". The process and workflow of this study follow code from Adyatama [[^2]](https://rpubs.com/Argaadya/image_conv). The dataset can be downloaded from Kaggle Website [[^3]](https://www.kaggle.com/datasets/deepcontractor/is-that-santa-image-classification). 
+
+
+# Library And Setup
+
+The following are the library used in this study. We also need to specify the `conda environment` that will be used. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Data wrangling
+library(tidyverse)
+
+# Image manipulation
+library(imager)
+
+# Deep learning
+library(keras)
+
+# Model Evaluation
+library(caret)
+
+# Use conda environment
+use_condaenv("r-tensorflow")
+
+options(scipen = 999)
+```
+
+# Exploratory Data Analysis 
+
+First, we need to locate the folder for each target class. In here, we have two classes, which are "not-a-santa" and "santa". 
+
+```{r}
+# Locate the folder for target
+folder_list <- list.files("santa/train/")
+
+# Observe the folder_list
+folder_list
+```
+
+We combine the directory of the train folder with the folder list name to observe pictures inside each folder.
+
+```{r}
+# Combine directory and folder list target
+folder_path <- paste0("santa/train/", folder_list, "/")
+
+# Observe folder_path 
+folder_path
+```
+
+To create a loop and gather the file name for each folder ("not-a-santa" and "santa"), we can use the function `map()`. Then, pipe it with the function `unlist()`to combine the file name from two folders. 
+
+```{r}
+# Get file name
+file_name <- map(folder_path, 
+                 function(x) paste0(x, list.files(x))) %>% 
+                 unlist()
+
+# First 6 file name
+head(file_name)
+
+# Last 6 file name 
+tail(file_name)
+```
+
+The total file to be used to train and validate the model is **614** as shown below output.
+
+```{r}
+length(file_name)
+```
+
+We use the function `load.image()` to observe the content of the file. Here, we can observe 6 samples of the content. 
+
+```{r}
+# Randomly select image
+set.seed(500)
+
+# Sample file_name
+sample_image <- sample(file_name, 6)
+
+# Load image into R
+img <- map(sample_image, load.image)
+
+# Plot image and Create 2 x 3 image grid
+par(mfrow = c(2, 3)) 
+map(img, plot)
+```
+
+# Check Image Dimension
+
+The information on the image dimension consists of 
+
+- The `height` and `width` of the image in pixels. 
+- The `color channels` describes the format of color (1 = grayscale and 3 = RGB)
+
+```{r}
+# Full image description
+img <- load.image(file_name[1])
+
+# Observe `img`
+img
+```
+As shown in the above output, the picture has a width and height of 250 and 250 pixels, respectively. And it has RGB colour channels. Now, we create the function to load information on the width and height of images. We call the function as `get_dim()`.
+
+```{r}
+# Function for acquiring width and height of an image
+get_dim <- function(x){
+  
+  img <- load.image(x) 
+  
+  df_img <- data.frame(height = height(img),
+                       width = width(img),
+                       filename = x
+                       )
+  
+  return(df_img)
+}
+
+# Observe the function to the first file name
+get_dim(file_name[1])
+```
+
+We are sampling 100 images from the file name to obtain the height and width of the images and observe the first 10 results. 
+
+```{r}
+# Randomly get 100 sample images
+set.seed(500)
+sample_file <- sample(file_name, 100)
+
+# Run the `get_dim()` function for each image
+file_dim <- map_df(sample_file, get_dim)
+
+# Check for the first 10 data
+head(file_dim, 10)
+```
+Observe the summary of the `file_dim`. The ranges of images are between 150 and 5176 pixels. 
+
+```{r}
+summary(file_dim)
+```
+
+# Data Processing
+
+In this section, we determine the input size for the image, so that all input images will have similar dimensions. We use 128 x 128 pixels. Then, we set the batch size to 100. 
+
+```{r}
+# Desired height and width of images
+target_size <- c(128,128)
+
+# Batch size for training the model
+batch_size <- 100
+```
+
+In this section, we will use "Image Augmentation" to increase the number of training data without acquiring new images by using an image data generator. We create the image generator with the following properties : 
+
+- Scaling the pixel value by dividing the pixel value by 255
+- Flip the image horizontally
+- Flip the image vertically
+- Rotate image from 0 and 45 degree
+- Zoom in or zoom out by 25% (zoom 75% or 125%)
+- Use 20% of the data as a validation dataset
+
+```{r}
+
+# Image Generator
+train_data_gen <- image_data_generator(rescale = 1/255, # Scaling pixel value
+                                       horizontal_flip = T, # Flip image horizontally
+                                       vertical_flip = T, # Flip image vertically 
+                                       rotation_range = 45, # Rotate image from 0 to 45 degrees
+                                       zoom_range = 0.25, # Zoom in or zoom out range
+                                       validation_split = 0.2 # 20% data as validation data
+                                       )
+```
+
+We load the train and validation data into the image generator by using `flow_images_from_directory()`. The directory will be `santa/train/`.  
+
+```{r}
+# Train Dataset
+train_image_array_gen <- flow_images_from_directory(directory = "santa/train/", # Folder of the data
+                                                    target_size = target_size, # target of the image dimension (128 x 128)  
+                                                    color_mode = "rgb", # use RGB color
+                                                    batch_size = batch_size , # batch size is 100
+                                                    seed = 123,  # set random seed
+                                                    subset = "training", # declare that this is for training data
+                                                    generator = train_data_gen
+                                                    )
+
+# Validation Dataset
+val_image_array_gen <- flow_images_from_directory(directory = "santa/train/",
+                                                  target_size = target_size, 
+                                                  color_mode = "rgb", 
+                                                  batch_size = batch_size ,
+                                                  seed = 123,
+                                                  subset = "validation", 
+                                                  generator = train_data_gen
+                                                  )
+```
+
+In the below code, we observe the proportion of both classes in the training dataset. Also, we specify the number of target classes `output_n`. 
+
+```{r}
+# Number of training samples
+train_samples <- train_image_array_gen$n
+
+# Number of validation samples
+valid_samples <- val_image_array_gen$n
+
+# Number of target classes/categories
+output_n <- n_distinct(train_image_array_gen$classes)
+
+# Get the class proportion
+table("\nClass Proportion" = factor(train_image_array_gen$classes)) %>% 
+  prop.table()
+```
+
+The class proportion for the train dataset is balance. The index represent the label for each class ordered alphabetically (`0` = not-a-santa, `1` = santa).
+
+
+# Model Original 
+
+## Model Architecture
+
+A Convolutional Neural Network (ConvNet/CNN) is a deep learning method that can process an input image, assign importance to learnable weights and biases to be able to differentiate one image from the other [[^4]](https://towardsdatascience.com/a-comprehensive-guide-to-convolutional-neural-networks-the-eli5-way-3bd2b1164a53). The CNN also can be performed to speech or audio signal inputs. The following are model architectures for model original. 
+
+- **Convolutional layer** is the first layer of CNN. This layer can extract features from the 2D image and identify the greater portions of the image. 
+- **Max Pooling layer** to downsample the image features
+- **Flattening layer** to flatten data from the 2D array to 1D array
+- **Dense layer** to capture more information
+- **Dense layer for output** with softmax activation function.
+
+We set the input shape, which consists of the **target_size** and the **color channels** ( RGB = 3 )
+
+```{r}
+# input shape of the image
+c(target_size, 3) 
+```
+
+```{r, warning = FALSE}
+# Set Initial Random Weight
+tensorflow::tf$random$set_seed(123)
+
+model <- keras_model_sequential() %>% 
+  
+  # Convolution Layer 1
+  layer_conv_2d(filters = 64,
+                kernel_size = c(3,3),
+                padding = "same",
+                activation = "relu",
+                input_shape = c(target_size, 3) 
+                ) %>% 
+
+  # Max Pooling Layer 1
+  layer_max_pooling_2d(pool_size = c(2,2),
+                       strides = c(2,2)) %>% 
+  
+  # Convolution Layer 2
+  layer_conv_2d(filters = 64,
+                kernel_size = c(3,3),
+                padding = "same",
+                activation = "relu"
+                ) %>% 
+
+  # Max Pooling Layer 2
+  layer_max_pooling_2d(pool_size = c(2,2),
+                       strides = c(2,2)) %>% 
+  
+  # Flattening Layer
+  layer_flatten() %>% 
+  
+  # Dense Layer1
+  layer_dense(units = 128,
+              activation = "relu") %>%
+
+  # Output Layer
+  layer_dense(units = output_n,
+              activation = "softmax",
+              name = "Output")
+  
+model
+```
+
+- The input image has 128 x 128 pixels from 64 filters. 
+- Set the `padding = same` to keep the dimension 128 x 128 pixels after being extracted. 
+- Downsample for each 2 x 2 pooling area, thus the data has 64 x 64 pixels from 32 filters.
+- Set another convolutional layer and downsample, thus the data has 32 x 32 pixels from 64 filters.  
+- Flatten the 2D array into 1D with 32 x 32 x 64 = 65536 nodes. 
+- Extract information using a simple dense layer. 
+- Output layer will transform the softmax activation function to obtain the probability of each class as the output.
+
+
+## Model Fitting 
+
+In compile section, we define the the `loss = categorical_crossentropy` and `optimizer = optimizer_adam`
+
+```{r}
+# Compile Model
+model %>% 
+  compile(
+    loss = "categorical_crossentropy",
+    optimizer = optimizer_adam(learning_rate = 0.001),
+    metrics = "accuracy"
+  )
+```
+
+The model will use validation dataset from the generator to evaluate the model. Also, we set the `epoch = 5`. We save the model as object called `history`.
+
+```{r}
+# Fit data into model
+history <- model %>% 
+  fit(
+  # training data
+  train_image_array_gen,
+
+  # training epochs
+  steps_per_epoch = as.integer(train_samples / batch_size), 
+  epochs = 5, 
+  
+  # validation data
+  validation_data = val_image_array_gen,
+  validation_steps = as.integer(valid_samples / batch_size)
+) 
+
+# Plot the history
+plot(history)
+
+```
+
+
+## Model Evaluation
+
+We evaluate the model by using a confusion matrix using the validation data from the generator. We create an object called `val_data` containing the file name of the image. For this file name, we extract the categorical label as the actual value of the target variable. 
+
+```{r}
+val_data <- data.frame(file_name = paste0("santa/train/", val_image_array_gen$filenames)) %>% 
+  mutate(class = str_extract(file_name, "not-a-santa|Santa"))
+
+# Observe the val_data
+tail(val_data, 10)
+```
+
+We convert the image into an array with a dimension of 128 x 128 pixels with 3 colour channels (RGB). We perform this to ensure the testing data is in the actual image. 
+
+```{r}
+# Function to convert image to array
+image_prep <- function(x) {
+  arrays <- lapply(x, function(path) {
+    img <- image_load(path, target_size = target_size, 
+                      grayscale = F # Set FALSE if image is RGB
+                      )
+    
+    x <- image_to_array(img)
+    x <- array_reshape(x, c(1, dim(x)))
+    x <- x/255 # rescale image pixel
+  })
+  do.call(abind::abind, c(arrays, list(along = 1)))
+}
+```
+
+```{r}
+test_x <- image_prep(val_data$file_name)
+
+# Check dimension of testing data set
+dim(test_x)
+```
+
+The validation data consists of 122 images with dimensions of 128 x 128 pixels and 3 colour channels (RGB). Then, we perform prediction on the `test_x` data. 
+
+```{r, warning = FALSE}
+# Prediction
+pred_val <- predict_classes(model, test_x) 
+
+# Observe first 10 prediction
+head(pred_val, 10)
+```
+We convert the encoding into proper class label by using function `decode()`.
+
+```{r}
+# Convert encoding to label
+decode <- function(x){
+  case_when(x == 0 ~ "not-a-santa",
+            x == 1 ~ "Santa"
+            )
+}
+
+# Apply the function to `pred_val`
+pred_val <- sapply(pred_val, decode) 
+
+# Observe `pred_val`
+head(pred_val, 10)
+```
+
+```{r}
+confusionMatrix(as.factor(pred_val), as.factor(val_data$class), positive="Santa")
+```
+
+For this study, we want to have the highest accuracy for the model. As shown in the confusion matrix, the accuracy of the model is quite good. We can perform model tuning and observe if the tune model can improve the accuracy of the original model. 
+
+# Model Tuning
+
+##  Model Architecture
+
+The improvement model will have additional CNN layers, so that more information can be captured. The following is our improved model architecture:
+
+- 1st Convolutional layer to extract features from 2D image with relu activation function
+- 2nd Convolutional layer to extract features from 2D image with relu activation function
+- Max pooling layer
+- 3rd Convolutional layer to extract features from 2D image with relu activation function
+- Max pooling layer
+- 4th Convolutional layer to extract features from 2D image with relu activation function
+- Max pooling layer
+- 5th Convolutional layer to extract features from 2D image with relu activation function
+- Max pooling layer
+- Flattening layer from 2D array to 1D array
+- Dense layer to capture more information
+- Dense layer for output layer
+
+## Model Fitting
+
+```{r}
+tensorflow::tf$random$set_seed(123)
+
+model_big <- keras_model_sequential() %>% 
+  
+  # First convolutional layer
+  layer_conv_2d(filters = 128,
+                kernel_size = c(5,5), # 5 x 5 filters
+                padding = "same",
+                activation = "relu",
+                input_shape = c(target_size, 3)
+                ) %>% 
+  
+  # Second convolutional layer
+  layer_conv_2d(filters = 128,
+                kernel_size = c(3,3), # 3 x 3 filters
+                padding = "same",
+                activation = "relu"
+                ) %>% 
+  
+  # Max pooling layer
+  layer_max_pooling_2d(pool_size = c(2,2)) %>% 
+  
+  # Third convolutional layer
+  layer_conv_2d(filters = 64,
+                kernel_size = c(3,3),
+                padding = "same",
+                activation = "relu"
+                ) %>% 
+
+  # Max pooling layer
+  layer_max_pooling_2d(pool_size = c(2,2)) %>% 
+  
+  # Fourth convolutional layer
+  layer_conv_2d(filters = 128,
+                kernel_size = c(3,3),
+                padding = "same",
+                activation = "relu"
+                ) %>% 
+  
+  # Max pooling layer
+  layer_max_pooling_2d(pool_size = c(2,2)) %>% 
+
+  # Fifth convolutional layer
+  layer_conv_2d(filters = 256,
+                kernel_size = c(3,3),
+                padding = "same",
+                activation = "relu"
+                ) %>% 
+  
+  # Max pooling layer
+  layer_max_pooling_2d(pool_size = c(2,2)) %>% 
+  
+  # Flattening layer
+  layer_flatten() %>% 
+  
+  # Dense layer
+  layer_dense(units = 64,
+              activation = "relu") %>% 
+  
+  # Output layer
+  layer_dense(name = "Output",
+              units = 2, 
+              activation = "softmax")
+
+model_big
+```
+
+We train the data with more epochs and save the model as `history_tune`. 
+
+```{r, warning =FALSE}
+model_big %>% 
+  compile(
+    loss = "categorical_crossentropy",
+    optimizer = optimizer_adam(lr = 0.001),
+    metrics = "accuracy")
+
+```
+
+```{r}
+history_tune <- model_big %>% 
+  fit_generator(
+  # training data
+  train_image_array_gen,
+  
+  # epochs
+  steps_per_epoch = as.integer(train_samples / batch_size), 
+  epochs = 30, 
+  
+  # validation data
+  validation_data = val_image_array_gen,
+  validation_steps = as.integer(valid_samples / batch_size),
+  )
+
+plot(history_tune)
+```
+
+
+## Model Evaluation
+
+We repeat the evaluate process the data to obtain the confusion matrix. 
+
+```{r, warning=FALSE}
+
+pred_tune <- predict_classes(model_big, test_x) 
+
+head(pred_tune, 10)
+```
+
+```{r}
+# Apply the convert encoding
+pred_tune <- sapply(pred_tune, decode) 
+
+# Observe `pred_tune`
+head(pred_tune, 10)
+```
+Now, let's observe the confusion matrix. 
+
+```{r}
+confusionMatrix(as.factor(pred_tune), 
+                as.factor(val_data$class), 
+                positive="Santa"
+                )
+```
+
+The accuracy of the model slightly improves with tuning the model. Thus, we can perform the prediction on our test dataset.  
+
+# Prediction Testing Dataset 
+
+We will process our test dataset similar with validation dataset using `image_data_generator()`.
+
+```{r}
+# Generate test_data_gen
+test_data_gen <- image_data_generator(rescale = 1/255, # Scaling pixel value
+                                       horizontal_flip = T, # Flip image horizontally
+                                       vertical_flip = T, # Flip image vertically 
+                                       rotation_range = 45, # Rotate image from 0 to 45 degrees
+                                       zoom_range = 0.25, # Zoom in or zoom out range
+                                       validation_split = 0.5 # 50% data as validation data
+                                       )
+# Generate array for the test_data_gen
+test_image_array_gen <- flow_images_from_directory(directory = "santa/test/", # Folder of the data
+                                                    target_size = target_size, # target of the image dimension (128 x 128)  
+                                                    color_mode = "rgb", # use RGB color
+                                                    batch_size = batch_size , # batch size is 100
+                                                    seed = 123,  # set random seed
+                                                    generator = test_data_gen,
+                                                    subset="validation"
+                                                    )
+# Create test_data
+test_data <- data.frame(file_name = paste0("santa/test/", test_image_array_gen$filenames)) %>% 
+  mutate(class = str_extract(file_name, "not-a-santa|Santa"))
+
+# Observe `test_data`
+tail(test_data)
+```
+
+Check dimension of the test dataset
+
+```{r}
+# Create the test data set
+test <- image_prep(test_data$file_name)
+
+# Check dimension of testing data set
+dim(test)
+```
+We have 308 images and the dimension is already converted to 128 x 128 pixels. Now, we generate the prediction and apply the conversion to label the prediction. 
+
+```{r, warning =FALSE}
+
+# Generate the prediction 
+pred_test <- predict_classes(model_big, test) 
+
+
+# Apply the convert encoding
+pred_test <- sapply(pred_test, decode) 
+
+# Observe `pred_tune`
+head(pred_test, 10)
+```
+
+
+```{r}
+confusionMatrix(as.factor(pred_test), 
+                as.factor(test_data$class), 
+                positive="Santa"
+                )
+```
+
+The model is really good to predict the test dataset. It is shown by high value of accuracy. 
+
+# Conclusion 
+
+The conventional Network technique can be used to predict the image classification (Santa or Not Santa). By increasing the number of CNN layers and the number of epochs, the tune model slightly improves accuracy of original model. It is such a powerful technique to be used to predict image classification. However, the training time to perform the model is quite long.  
+
+# References
+
+[^1] : [Santa Clause](https://en.wikipedia.org/wiki/Santa_Claus#:~:text=Santa%20is%20generally%20depicted%20as,full%20of%20gifts%20for%20children.)
+[^2] : [Image Classification in R by Convolutional Neural Network](https://rpubs.com/Argaadya/image_conv).
+[^3] : [Dataset Collection](https://www.kaggle.com/datasets/deepcontractor/is-that-santa-image-classification).
+[^4] : [Convolutional Neural Network](https://towardsdatascience.com/a-comprehensive-guide-to-convolutional-neural-networks-the-eli5-way-3bd2b1164a53).
+
+
+
+
+
+
+
+
